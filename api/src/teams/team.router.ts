@@ -1,6 +1,6 @@
 // Les routes de Team. Hier : TeamController.
 import { Router } from 'express';
-import { cached } from '../cache.js';
+import { cached, invalidate } from '../cache.js';
 import { HttpError } from '../errors.js';
 import { SeedQuerySchema, type SeedQuery } from '../matches/match.schema.js';
 import { simulate } from '../matches/simulator.js';
@@ -46,6 +46,8 @@ teamRouter.get('/:id/versus/:opponentId', validateQuery(SeedQuerySchema), cached
 // POST /api/teams
 teamRouter.post('/', requireAuth, validate(TeamSchema), async (req, res) => {
   const team = await teams.insert(req.body as TeamInput);
+  await invalidate('/api/teams'); // la liste des équipes a changé
+  await invalidate('/api/players'); // (par cohérence : la vue d'un joueur embarque son équipe)
   res.status(201).location(`/api/teams/${team.id}`).json(team);
 });
 
@@ -53,6 +55,8 @@ teamRouter.post('/', requireAuth, validate(TeamSchema), async (req, res) => {
 teamRouter.patch('/:id', requireAuth, validate(TeamPatchSchema), async (req, res) => {
   const team = await teams.update(parseId(req.params.id, 'Team'), req.body as Partial<TeamInput>);
   if (!team) throw new HttpError(404, 'Team not found');
+  await invalidate('/api/teams');
+  await invalidate('/api/players'); // la vue d'un joueur contient le nom et le tag de son équipe
   res.json(team);
 });
 
@@ -60,5 +64,8 @@ teamRouter.patch('/:id', requireAuth, validate(TeamPatchSchema), async (req, res
 teamRouter.delete('/:id', requireAuth, async (req, res) => {
   const deleted = await teams.delete(parseId(req.params.id, 'Team'));
   if (!deleted) throw new HttpError(404, 'Team not found');
+  await invalidate('/api/teams');
+  await invalidate('/api/players'); // ses joueurs deviennent agents libres : leur vue (team: null) change
+  // Règle simple à retenir : toute écriture sur un joueur ou une équipe vide les deux familles de clés.
   res.sendStatus(204);
 });
