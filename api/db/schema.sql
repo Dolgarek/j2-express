@@ -50,9 +50,4 @@ CREATE TABLE "user" (
   created_at TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- Bonus 13 (refresh token). On stocke le sha256 du jeton, pas le jeton : une fuite de la base ne donne pas de sessions.
-CREATE TABLE refresh_token (
-  token_hash CHAR(64)    PRIMARY KEY,
-  user_id    INTEGER     NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
-  expires_at TIMESTAMPTZ NOT NULL
-);
+-- Bonus 13 : la table refresh_token a existé ici ; le bonus 25 l'a remplacée par des clés Redis « refresh:<sha256> ».
