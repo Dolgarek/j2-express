@@ -93,5 +93,10 @@ export async function invalidate(prefix: string): Promise<void> {
  * TODO 23 (TD Redis, étape 4) : 'ok' si Redis répond à PING, 'down' sinon (pour /api/health).
  */
 export async function redisStatus(): Promise<'ok' | 'down'> {
-  return 'down';
+  try {
+    await redis.ping();
+    return 'ok';
+  } catch {
+    return 'down';
+  }
 }
