@@ -29,7 +29,7 @@ BOLD   := \033[1m
 RESET  := \033[0m
 
 .PHONY: help doctor install up down restart build ps logs sh \
-        npm typecheck own db-reset db-shell redis-cli \
+        npm typecheck own db-reset db-shell redis-cli prisma prisma-studio \
         test test-env test-db report
 
 ## —— 🚀 Démarrage ————————————————————————————————————————————————————————————
@@ -102,6 +102,12 @@ npm: ## npm dans le conteneur : make npm c="install dayjs"
 
 typecheck: ## Vérifie les types TypeScript (tsc --noEmit), sans lancer le serveur
 	$(EXEC_API) npm run typecheck
+
+prisma: ## La CLI Prisma dans le conteneur : make prisma c="db pull" · make prisma c=generate · make prisma c=validate
+	$(EXEC_API) npx prisma $(c)
+
+prisma-studio: ## Prisma Studio, l'explorateur de données : http://localhost:5555 (Ctrl+C pour arrêter)
+	$(COMPOSE) exec -e PRISMA_PORT=$(or $(PRISMA_PORT),5555) api sh scripts/studio.sh
 
 # Filet de sécurité : si des fichiers de api/ appartiennent à un autre utilisateur (hôte dont
 # l'identifiant diffère de celui du conteneur), les rendre à l'utilisateur courant.

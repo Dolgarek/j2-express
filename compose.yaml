@@ -73,6 +73,8 @@ services:
       JWT_EXPIRES_IN: 1h
     ports:
       - "${API_PORT:-8000}:3000"
+      # Prisma Studio (make prisma-studio) : http://localhost:5555
+      - "${PRISMA_PORT:-5555}:5555"
     tty: true
 
   api-test:

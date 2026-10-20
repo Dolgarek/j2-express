@@ -1,55 +1,54 @@
-// L'accès aux données de Match : la vue (deux jointures sur team) est écrite à la main.
-import { query } from '../db.js';
-import { BaseRepository } from '../repository.js';
-import type { Match, MatchStatus, MatchView } from './match.schema.js';
+// L'accès aux données de Match, avec Prisma. La vue (deux équipes, le gagnant, le statut) est
+// construite en TypeScript à partir d'un include : ce que json_build_object faisait en SQL hier.
+import { prisma } from '../prisma.js';
+import type { Match, MatchInput, MatchStatus, MatchView } from './match.schema.js';
 import type { MatchResult } from './simulator.js';
 
-const VIEW = `
-  SELECT m.id,
-         CASE WHEN m.played_at IS NULL THEN 'scheduled' ELSE 'played' END AS status,
-         json_build_object('id', a.id, 'name', a.name, 'tag', a.tag) AS "teamA",
-         json_build_object('id', b.id, 'name', b.name, 'tag', b.tag) AS "teamB",
-         CASE WHEN m.played_at IS NULL THEN NULL ELSE json_build_array(m.score_a, m.score_b) END AS score,
-         w.tag AS winner,
-         m.played_at AS "playedAt"
-    FROM match m
-    JOIN team a ON a.id = m.team_a_id
-    JOIN team b ON b.id = m.team_b_id
-    LEFT JOIN team w ON w.id = m.winner_id`;
+const teamSummary = { select: { id: true, name: true, tag: true } };
+const include = { teamA: teamSummary, teamB: teamSummary, winner: { select: { tag: true } } };
+type Row = Match & { teamA: { id: number; name: string; tag: string }; teamB: { id: number; name: string; tag: string }; winner: { tag: string } | null };
 
-class MatchRepository extends BaseRepository<Match> {
-  constructor() {
-    super(
-      'match',
-      ['id', 'team_a_id AS "teamAId"', 'team_b_id AS "teamBId"', 'score_a AS "scoreA"', 'score_b AS "scoreB"', 'winner_id AS "winnerId"', 'played_at AS "playedAt"'],
-      'id',
-    );
-  }
-
-  async findView(id: number): Promise<MatchView | null> {
-    const [row] = await query<MatchView>(`${VIEW} WHERE m.id = $1`, [id]);
-    return row ?? null;
-  }
-
-  /** Tous les matchs, ou ceux d'un statut, du plus ancien au plus récent. */
-  findByStatus(status?: MatchStatus): Promise<MatchView[]> {
-    if (!status) return query<MatchView>(`${VIEW} ORDER BY m.id`);
-    const condition = status === 'played' ? 'm.played_at IS NOT NULL' : 'm.played_at IS NULL';
-    return query<MatchView>(`${VIEW} WHERE ${condition} ORDER BY m.id`);
-  }
-
-  /** Enregistre le résultat d'un match pas encore joué ; false s'il l'était déjà (ou n'existe pas). */
-  async recordResult(id: number, result: MatchResult): Promise<boolean> {
-    const winnerId = result.winner === result.teamA.tag ? result.teamA.id : result.teamB.id;
-    const rows = await query<{ id: number }>(
-      `UPDATE match
-          SET score_a = $2, score_b = $3, winner_id = $4, played_at = now()
-        WHERE id = $1 AND played_at IS NULL
-        RETURNING id`,
-      [id, result.score[0], result.score[1], winnerId],
-    );
-    return rows.length > 0;
-  }
+function toView(m: Row): MatchView {
+  const played = m.playedAt !== null;
+  return {
+    id: m.id,
+    status: played ? 'played' : 'scheduled',
+    teamA: m.teamA,
+    teamB: m.teamB,
+    score: played ? [m.scoreA ?? 0, m.scoreB ?? 0] : null,
+    winner: m.winner?.tag ?? null,
+    playedAt: m.playedAt,
+  };
 }
 
-export const matches = new MatchRepository();
+export const matches = {
+  async findView(id: number): Promise<MatchView | null> {
+    const row = await prisma.match.findUnique({ where: { id }, include });
+    return row ? toView(row) : null;
+  },
+
+  async findByStatus(status?: MatchStatus): Promise<MatchView[]> {
+    const where = status === 'played' ? { playedAt: { not: null } } : status === 'scheduled' ? { playedAt: null } : undefined;
+    const rows = await prisma.match.findMany({ where, include, orderBy: { id: 'asc' } });
+    return rows.map(toView);
+  },
+
+  insert(data: MatchInput): Promise<{ id: number }> {
+    return prisma.match.create({ data, select: { id: true } });
+  },
+
+  /** Enregistre le résultat d'un match pas encore joué ; false s'il l'était déjà. updateMany = UPDATE … WHERE. */
+  async recordResult(id: number, result: MatchResult): Promise<boolean> {
+    const winnerId = result.winner === result.teamA.tag ? result.teamA.id : result.teamB.id;
+    const { count } = await prisma.match.updateMany({
+      where: { id, playedAt: null },
+      data: { scoreA: result.score[0], scoreB: result.score[1], winnerId, playedAt: new Date() },
+    });
+    return count > 0;
+  },
+
+  async delete(id: number): Promise<boolean> {
+    const { count } = await prisma.match.deleteMany({ where: { id } });
+    return count > 0;
+  },
+};

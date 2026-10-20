@@ -1,35 +1,40 @@
-// L'accès aux données de Team. Hier : TeamRepository (Doctrine).
-import { query } from '../db.js';
-import { BaseRepository } from '../repository.js';
-import { players } from '../players/player.repository.js';
-import type { Team, TeamWithPlayers } from './team.schema.js';
+// L'accès aux données de Team, avec Prisma. La relation Team → Player se lit avec include.
+import { prisma } from '../prisma.js';
+import type { Team, TeamInput, TeamWithPlayers } from './team.schema.js';
 
-class TeamRepository extends BaseRepository<Team> {
-  constructor() {
-    super('team', ['id', 'name', 'tag', 'country'], 'name');
-  }
+const playerSummary = { select: { id: true, nickname: true, role: true, rating: true }, orderBy: { nickname: 'asc' as const } };
 
-  /** Une équipe avec ses joueurs (deux requêtes), ou null. */
-  async findOneWithPlayers(id: number): Promise<TeamWithPlayers | null> {
-    const team = await this.findOne(id);
-    if (!team) return null;
-    return { ...team, players: await players.findByTeam(id) };
-  }
+export const teams = {
+  findOne(id: number): Promise<Team | null> {
+    return prisma.team.findUnique({ where: { id } });
+  },
 
-  /** Le niveau moyen d'une équipe (entier), ou null si elle n'a aucun joueur. */
+  /** Une équipe avec ses joueurs : une requête avec include, au lieu de deux requêtes hier. */
+  findOneWithPlayers(id: number): Promise<TeamWithPlayers | null> {
+    return prisma.team.findUnique({ where: { id }, include: { players: playerSummary } });
+  },
+
+  /** Le niveau moyen d'une équipe (entier), ou null si elle n'a aucun joueur : aggregate = avg() en SQL. */
   async ratingOf(teamId: number): Promise<number | null> {
-    const [row] = await query<{ rating: number | null }>(
-      `SELECT round(avg(rating))::int AS rating FROM player WHERE team_id = $1`,
-      [teamId],
-    );
-    return row?.rating ?? null;
-  }
+    const { _avg } = await prisma.player.aggregate({ where: { teamId }, _avg: { rating: true } });
+    return _avg.rating === null ? null : Math.round(_avg.rating);
+  },
 
-  /** Toutes les équipes, ou celles d'un pays, triées par nom. */
   findByCountry(country?: string): Promise<Team[]> {
-    if (!country) return query<Team>(`${this.select} ORDER BY name`);
-    return query<Team>(`${this.select} WHERE country = $1 ORDER BY name`, [country]);
-  }
-}
+    return prisma.team.findMany({ where: country ? { country } : undefined, orderBy: { name: 'asc' } });
+  },
 
-export const teams = new TeamRepository();
+  insert(data: TeamInput): Promise<Team> {
+    return prisma.team.create({ data });
+  },
+
+  async update(id: number, data: Partial<TeamInput>): Promise<Team | null> {
+    if (!(await prisma.team.findUnique({ where: { id }, select: { id: true } }))) return null;
+    return prisma.team.update({ where: { id }, data });
+  },
+
+  async delete(id: number): Promise<boolean> {
+    const { count } = await prisma.team.deleteMany({ where: { id } });
+    return count > 0;
+  },
+};

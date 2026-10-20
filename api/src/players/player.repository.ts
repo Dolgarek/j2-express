@@ -1,83 +1,71 @@
-// L'accès aux données de Player. Le CRUD vient de BaseRepository ; la vue avec l'équipe imbriquée
-// est une requête écrite à la main (LEFT JOIN + json_build_object).
-import { query } from '../db.js';
-import { BaseRepository } from '../repository.js';
-import type { Player, PlayerSearch, PlayerSummary, PlayerView, TopQuery } from './player.schema.js';
+// L'accès aux données de Player, avec Prisma. La « vue » (sans birthDate, avec l'équipe réduite)
+// est un select : on choisit les colonnes, Prisma construit la jointure.
+import { prisma } from '../prisma.js';
+import type { PlayerInput, PlayerSearch, PlayerSummary, PlayerView, TopQuery } from './player.schema.js';
 
-// La « vue » d'un joueur : sans birth_date, avec son équipe réduite à { id, name, tag } (ou null)
-const VIEW_COLUMNS = `p.id, p.nickname, p.country, p.role, p.rating,
-         CASE WHEN t.id IS NULL THEN NULL
-              ELSE json_build_object('id', t.id, 'name', t.name, 'tag', t.tag) END AS team`;
-const VIEW_FROM = `FROM player p LEFT JOIN team t ON t.id = p.team_id`;
-const VIEW = `SELECT ${VIEW_COLUMNS} ${VIEW_FROM}`;
+// Le select de la vue : réutilisé partout, comme la constante VIEW d'hier
+const view = {
+  id: true,
+  nickname: true,
+  country: true,
+  role: true,
+  rating: true,
+  team: { select: { id: true, name: true, tag: true } },
+} as const;
 
-class PlayerRepository extends BaseRepository<Player> {
-  constructor() {
-    super('player', ['id', 'nickname', 'country', 'role', 'rating', 'birth_date AS "birthDate"', 'team_id AS "teamId"'], 'nickname');
-  }
+export const players = {
+  findView(id: number): Promise<PlayerView | null> {
+    return prisma.player.findUnique({ where: { id }, select: view });
+  },
 
-  /** La vue d'un joueur, ou null. */
-  async findView(id: number): Promise<PlayerView | null> {
-    const [row] = await query<PlayerView>(`${VIEW} WHERE p.id = $1`, [id]);
-    return row ?? null;
-  }
-
-  /**
-   * Recherche paginée : les filtres présents ajoutent une condition ($n) ; le total est compté
-   * par la même requête (count(*) OVER ()), avant LIMIT/OFFSET.
-   */
+  /** Recherche paginée : le where se construit comme un objet ; le total est une seconde requête (count). */
   async search({ page, limit, country, teamId, q }: PlayerSearch): Promise<{ items: PlayerView[]; total: number }> {
-    const conditions: string[] = [];
-    const values: unknown[] = [];
-    if (country) {
-      values.push(country);
-      conditions.push(`p.country = $${values.length}`);
-    }
-    if (teamId) {
-      values.push(teamId);
-      conditions.push(`p.team_id = $${values.length}`);
-    }
-    if (q) {
-      values.push(`%${q}%`); // les % vont dans la VALEUR, jamais dans le texte SQL
-      conditions.push(`p.nickname ILIKE $${values.length}`);
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    values.push(limit, (page - 1) * limit);
-    const rows = await query<PlayerView & { total: string }>(
-      `SELECT count(*) OVER () AS total, ${VIEW_COLUMNS}
-       ${VIEW_FROM} ${where}
-       ORDER BY p.nickname
-       LIMIT $${values.length - 1} OFFSET $${values.length}`,
-      values,
-    );
-    const total = rows.length ? Number(rows[0]!.total) : await this.countWhere(where, values.slice(0, -2));
-    return { items: rows.map(({ total: _total, ...view }) => view), total };
-  }
+    const where = {
+      ...(country && { country }),
+      ...(teamId && { teamId }),
+      ...(q && { nickname: { contains: q, mode: 'insensitive' as const } }), // ILIKE '%q%', sans écrire le %
+    };
+    const [items, total] = await prisma.$transaction([
+      prisma.player.findMany({ where, select: view, orderBy: { nickname: 'asc' }, skip: (page - 1) * limit, take: limit }),
+      prisma.player.count({ where }),
+    ]);
+    return { items, total };
+  },
 
-  /** Le total quand la page est vide (au-delà de la dernière page). */
-  private async countWhere(where: string, values: unknown[]): Promise<number> {
-    const [row] = await query<{ count: string }>(`SELECT count(*) AS count FROM player p ${where}`, values);
-    return Number(row?.count ?? 0);
-  }
-
-  /** Les meilleurs joueurs (rating décroissant), éventuellement d'un pays. */
   findTop({ limit, country }: TopQuery): Promise<PlayerView[]> {
-    return query<PlayerView>(
-      `${VIEW}
-       WHERE $1::text IS NULL OR p.country = $1
-       ORDER BY p.rating DESC, p.nickname
-       LIMIT $2`,
-      [country ?? null, limit],
-    );
-  }
+    return prisma.player.findMany({
+      where: country ? { country } : undefined,
+      select: view,
+      orderBy: [{ rating: 'desc' }, { nickname: 'asc' }],
+      take: limit,
+    });
+  },
 
-  /** Les joueurs d'une équipe, pour GET /api/teams/:id. */
   findByTeam(teamId: number): Promise<PlayerSummary[]> {
-    return query<PlayerSummary>(
-      `SELECT id, nickname, role, rating FROM player WHERE team_id = $1 ORDER BY nickname`,
-      [teamId],
-    );
-  }
-}
+    return prisma.player.findMany({
+      where: { teamId },
+      select: { id: true, nickname: true, role: true, rating: true },
+      orderBy: { nickname: 'asc' },
+    });
+  },
 
-export const players = new PlayerRepository();
+  /** birthDate arrive en chaîne AAAA-MM-JJ : Prisma veut un Date pour une colonne DATE. */
+  insert({ birthDate, ...data }: PlayerInput): Promise<{ id: number }> {
+    return prisma.player.create({ data: { ...data, birthDate: toDate(birthDate) }, select: { id: true } });
+  },
+
+  async update(id: number, { birthDate, ...data }: Partial<PlayerInput>): Promise<{ id: number } | null> {
+    if (!(await prisma.player.findUnique({ where: { id }, select: { id: true } }))) return null;
+    return prisma.player.update({ where: { id }, data: { ...data, birthDate: toDate(birthDate) }, select: { id: true } });
+  },
+
+  async delete(id: number): Promise<boolean> {
+    const { count } = await prisma.player.deleteMany({ where: { id } });
+    return count > 0;
+  },
+};
+
+/** undefined reste undefined (clé absente : Prisma n'y touche pas), null reste null (vider), une chaîne devient un Date. */
+function toDate(date: string | null | undefined): Date | null | undefined {
+  return date == null ? date : new Date(date);
+}

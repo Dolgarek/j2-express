@@ -1,8 +1,8 @@
 // LE middleware d'erreur : 4 paramètres, enregistré en dernier. Toutes les erreurs (next(err), exception
-// dans un handler async, erreur de express.json(), erreur PostgreSQL) finissent ici, en JSON cohérent.
+// dans un handler async, erreur de express.json(), erreur Prisma) finissent ici, en JSON cohérent.
 import type { ErrorRequestHandler } from 'express';
 import { ZodError } from 'zod';
-import { translatePgError } from '../db.js';
+import { translatePrismaError } from '../prisma.js';
 import { HttpError } from '../errors.js';
 
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
@@ -15,7 +15,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   } else if (err instanceof SyntaxError && 'status' in err && err.status === 400) {
     error = new HttpError(400, 'Bad Request'); // JSON illisible, levé par express.json()
   } else {
-    error = translatePgError(err) ?? new HttpError(500, 'Internal Server Error');
+    error = translatePrismaError(err) ?? new HttpError(500, 'Internal Server Error');
   }
 
   if (error.status === 500) console.error(err); // le détail reste côté serveur, jamais chez le client

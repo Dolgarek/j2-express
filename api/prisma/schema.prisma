@@ -1,0 +1,76 @@
+// Le schéma Prisma : la même base que db/schema.sql, décrite en modèles. Obtenu par « prisma db pull »
+// (introspection de la base existante), puis nettoyé : noms de modèles au singulier avec une majuscule,
+// champs en camelCase, @map / @@map vers les noms SQL. « prisma generate » produit le client typé
+// dans src/generated/prisma (gitignoré).
+//
+// Les contraintes CHECK (genre, team_size, rating, team_a <> team_b) ne sont pas modélisées par Prisma :
+// elles restent dans la base (schema.sql) et dans zod (validation à l'entrée).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Game {
+  id       Int    @id @default(autoincrement())
+  name     String @unique @db.VarChar(100)
+  genre    String @db.VarChar(20)
+  teamSize Int    @map("team_size")
+
+  @@map("game")
+}
+
+model Team {
+  id      Int    @id @default(autoincrement())
+  name    String @unique @db.VarChar(50)
+  tag     String @unique @db.VarChar(5)
+  country String @db.Char(2)
+
+  players       Player[]
+  matchesAsTeamA Match[] @relation("teamA")
+  matchesAsTeamB Match[] @relation("teamB")
+  matchesWon     Match[] @relation("winner")
+
+  @@map("team")
+}
+
+model Player {
+  id        Int       @id @default(autoincrement())
+  nickname  String    @unique @db.VarChar(30)
+  country   String    @db.Char(2)
+  role      String?   @db.VarChar(30)
+  rating    Int       @default(1000)
+  birthDate DateTime? @map("birth_date") @db.Date
+  teamId    Int?      @map("team_id")
+  team      Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("player")
+}
+
+model Match {
+  id       Int       @id @default(autoincrement())
+  teamAId  Int       @map("team_a_id")
+  teamBId  Int       @map("team_b_id")
+  scoreA   Int?      @map("score_a")
+  scoreB   Int?      @map("score_b")
+  winnerId Int?      @map("winner_id")
+  playedAt DateTime? @map("played_at") @db.Timestamptz(6)
+  teamA    Team      @relation("teamA", fields: [teamAId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  teamB    Team      @relation("teamB", fields: [teamBId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  winner   Team?     @relation("winner", fields: [winnerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@map("match")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique @db.VarChar(255)
+  password  String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("user")
+}
