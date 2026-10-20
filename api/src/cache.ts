@@ -34,7 +34,10 @@ export function connectRedis(): void {
  * (?country=IS&limit=3 et ?limit=3&country=IS sont la même réponse). Préfixe : « cache: ».
  */
 export function cacheKey(req: Request): string {
-  return `cache:${req.originalUrl}`;
+  const query = new URLSearchParams(req.query as Record<string, string>);
+  query.sort(); // ?limit=3&country=IS et ?country=IS&limit=3 → la même clé
+  const suffix = query.size ? `?${query.toString()}` : '';
+  return `cache:${req.path === '/' ? req.baseUrl : req.baseUrl + req.path}${suffix}`;
 }
 
 /**
@@ -46,8 +49,28 @@ export function cacheKey(req: Request): string {
  * Pour intercepter la réponse : remplacer res.json par une fonction qui stocke puis appelle l'original.
  * Si Redis échoue (get ou set) : next(), sans cache, sans erreur.
  */
-export function cached(_ttlSeconds: number): RequestHandler {
-  return (_req, _res, next) => next();
+export function cached(ttlSeconds: number): RequestHandler {
+  return async (req, res, next) => {
+    const key = cacheKey(req);
+
+    // HIT ?
+    const hit = await redis.get(key).catch(() => null);
+    if (hit !== null) {
+      res.set('X-Cache', 'HIT').type('json').send(hit);
+      return;
+    }
+
+    // MISS : on laisse la route répondre, mais on intercepte res.json pour stocker ce qu'elle envoie
+    res.set('X-Cache', 'MISS');
+    const originalJson = res.json.bind(res);
+    res.json = (body: unknown) => {
+      if (res.statusCode === 200) {
+        redis.set(key, JSON.stringify(body), { EX: ttlSeconds }).catch(() => undefined); // sans attendre
+      }
+      return originalJson(body);
+    };
+    next();
+  };
 }
 
 /**
@@ -55,8 +78,15 @@ export function cached(_ttlSeconds: number): RequestHandler {
  * invalidate('/api/players') après une écriture sur un joueur. Avec SCAN (redis.scanIterator), pas KEYS :
  * KEYS bloque le serveur le temps de parcourir TOUTES les clés. Une erreur Redis est avalée (log).
  */
-export async function invalidate(_prefix: string): Promise<void> {
-  return;
+export async function invalidate(prefix: string): Promise<void> {
+  try {
+    // scanIterator parcourt les clés par paquets, sans bloquer Redis ; MATCH filtre côté serveur
+    for await (const keys of redis.scanIterator({ MATCH: `cache:${prefix}*`, COUNT: 100 })) {
+      if (keys.length) await redis.del(keys);
+    }
+  } catch (err) {
+    console.error(`Redis : invalidation impossible (${(err as Error).message})`);
+  }
 }
 
 /**
