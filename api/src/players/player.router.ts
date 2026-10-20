@@ -1,5 +1,6 @@
 // Les routes de Player. Hier : PlayerController + le DTO PlayerInput.
 import { Router } from 'express';
+import { redis } from '../cache.js';
 import { HttpError } from '../errors.js';
 import { parseId } from '../middlewares/params.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
@@ -16,9 +17,21 @@ playerRouter.get('/', validateQuery(PlayerSearchSchema), async (_req, res) => {
 });
 
 // GET /api/players/top?limit=3&country=IS — déclarée AVANT /:id, sinon « top » est pris pour un id
-// TODO 20 (TD Redis, étape 1) : un cache à la main, ici même, avant de le généraliser (étape 2).
-playerRouter.get('/top', validateQuery(TopQuerySchema), async (_req, res) => {
-  res.json(await players.findTop(res.locals.query as TopQuery));
+// Étape 1 du TD Redis : un cache à la main, ici même (généralisé en middleware à l'étape 2).
+playerRouter.get('/top', validateQuery(TopQuerySchema), async (req, res) => {
+  const key = `cache:${req.originalUrl}`; // le chemin ET la query : ?limit=3 n'est pas ?limit=2
+
+  // 1. Le cache a-t-il déjà la réponse ? (une panne Redis → on fait comme si non)
+  const hit = await redis.get(key).catch(() => null);
+  if (hit !== null) {
+    res.set('X-Cache', 'HIT').type('json').send(hit); // déjà du JSON : on l'envoie tel quel
+    return;
+  }
+
+  // 2. Non : on interroge la base, on répond, et on garde la réponse 60 secondes
+  const top = await players.findTop(res.locals.query as TopQuery);
+  await redis.set(key, JSON.stringify(top), { EX: 60 }).catch(() => undefined);
+  res.set('X-Cache', 'MISS').json(top);
 });
 
 // GET /api/players/:id
