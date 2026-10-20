@@ -4,6 +4,7 @@ import { HttpError } from '../errors.js';
 import { requireAuth } from '../middlewares/requireAuth.js';
 import { validate } from '../middlewares/validate.js';
 import { generateRefreshToken, hashPassword, hashRefreshToken, signAccessToken, verifyPassword, type AuthUser } from './auth.service.js';
+import { rateLimitLogin } from './rate-limit.js';
 import { refreshTokens } from './refresh-token.repository.js';
 import { users } from './user.repository.js';
 import { LoginSchema, RefreshSchema, RegisterSchema, toPublic, type Credentials, type RefreshInput } from './user.schema.js';
@@ -19,7 +20,7 @@ authRouter.post('/register', validate(RegisterSchema), async (req, res) => {
 
 // POST /api/auth/login { email, password } → 200 { accessToken, tokenType: 'Bearer', expiresIn }
 // Email inconnu ou mot de passe faux → le MÊME 401 'Invalid credentials' (on ne dit pas lequel).
-authRouter.post('/login', validate(LoginSchema), async (req, res) => {
+authRouter.post('/login', validate(LoginSchema), rateLimitLogin, async (req, res) => {
   const { email, password } = req.body as Credentials;
   const user = await users.findByEmail(email);
   if (!user || !(await verifyPassword(password, user.password))) throw new HttpError(401, 'Invalid credentials');
