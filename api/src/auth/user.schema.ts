@@ -26,3 +26,9 @@ export const RegisterSchema = z.object({
 });
 export const LoginSchema = RegisterSchema; // mêmes champs, mêmes règles
 export type Credentials = z.infer<typeof RegisterSchema>;
+
+// Bonus 13 : POST /api/auth/refresh et /logout { refreshToken }
+export const RefreshSchema = z.object({
+  refreshToken: z.string().regex(/^[0-9a-f]{64}$/, 'must be a 64-character hexadecimal token'),
+});
+export type RefreshInput = z.infer<typeof RefreshSchema>;

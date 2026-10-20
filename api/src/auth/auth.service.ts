@@ -1,5 +1,6 @@
 // Les deux savoir-faire du matin, sans Express ni SQL : hacher un mot de passe (bcrypt) et
 // signer / vérifier un jeton (JWT). Le routeur et le middleware appellent ces fonctions.
+import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { HttpError } from '../errors.js';
@@ -72,4 +73,19 @@ export function verifyAccessToken(token: string): AuthUser {
   }
   if (typeof payload.sub !== 'string' || typeof payload.email !== 'string') throw new HttpError(401, 'Invalid token');
   return { id: Number(payload.sub), email: payload.email };
+}
+
+// ── Refresh token (bonus 13) ───────────────────────────────────────────────
+
+export const REFRESH_TTL_SECONDS = 7 * 24 * 3600; // 7 jours
+
+/** sha256 hexadécimal : ce qu'on STOCKE (le jeton lui-même ne quitte jamais le client, sauf pour être présenté). */
+export function hashRefreshToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/** Un jeton opaque de 64 caractères hexadécimaux (32 octets aléatoires), et son hachage. */
+export function generateRefreshToken(): { token: string; hash: string } {
+  const token = randomBytes(32).toString('hex');
+  return { token, hash: hashRefreshToken(token) };
 }
